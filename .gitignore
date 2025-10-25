@@ -1,0 +1,9 @@
+# building artifacts
+build
+venv
+
+# python build artifacts 
+src/python/binstatcuda/*.so
+**/__pycache__
+**/*.egg-info
+

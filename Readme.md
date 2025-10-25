@@ -35,6 +35,12 @@ hist_1d = bsc.histogram(x, bin_edges)
 hist_2d = bsc.histogram_2d(x, y, bin_edges)
 ```
 
+## Note
+
+
+- all float point arithematic are performed in `float`, inplicit casting happens
+- all counting are performed in `unsigned long long`
+
 
 ## TODO
 

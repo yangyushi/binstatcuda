@@ -1,0 +1,51 @@
+[build-system]
+requires = [
+    "setuptools>=64",
+    "wheel",
+    "cmake>=3.23",
+    "pybind11>=2.11",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binstatcuda"
+version = "0.1.0"
+description = "CUDA-accelerated binned statistics routines."
+readme = "Readme.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [
+    {name = "Yushi", email = "yangyushi1992@icloud.com"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: C++",
+    "Programming Language :: C++ :: 17",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7",
+    "numpy>=1.21",
+    "scipy>=1.8",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src/python"}
+
+[tool.setuptools.packages.find]
+where = ["src/python"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests/python"]
