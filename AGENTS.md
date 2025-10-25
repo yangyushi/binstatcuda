@@ -13,7 +13,6 @@
 ### General
 
 - DO follow the existing coding style in the codebase.
-- DO NOT hardcode credentials or tokens.
 - DO keep dependencies to a minimum.
 - DO follow the latest developments of the programming language.
 
@@ -52,10 +51,10 @@ def get_image_patches(
 
 #### Comment
 
-- DO NOT abuse inline comments.
 - DO use `# TODO:` to mark pending tasks.
 - DO comment critical information like array shapes.
 - DO prefer comments that explain *why*, rather than *what*.
+- DO NOT abuse inline comments.
 
 Example
 
@@ -111,9 +110,9 @@ def add_int(a: int, b: int) -> int:
 #### Dependencies
 
 - DO follow import order: stdlib ➜ third-party ➜ local.
+- DO prefer smaller, well‑maintained libs; justify heavy deps.
 - DO NOT use wildcard imports (`from module import *`).
 - DO NOT import unused modules or objects.
-- DO prefer smaller, well‑maintained libs; justify heavy deps.
 
 Example
 
@@ -255,7 +254,7 @@ class ImageMetadata:
 
 * DO use C++17 as the baseline (C++11 allowed in legacy modules; avoid mixing in one TU).
 * DO use 4 spaces per indentation level; DO NOT use tabs.
-* DO use K&R braces (`int f() { ... }`).
+* DO use K&R indentation style.
 * DO place one declaration per line.
 * DO use `snake_case` for functions and variables.
 * DO use `CapWords` for classes, structs, and enum types.
@@ -313,8 +312,8 @@ Example
 
 * DO follow include order: **standard library ➜ third-party ➜ local**.
 * DO use `#pragma once` in headers (or traditional include guards).
-* DO NOT include what you don’t use; keep headers minimal.
 * DO prefer small, well-maintained libs; justify heavy deps in the PR.
+* DO NOT include what you don’t use; keep headers minimal.
 
 Example
 
