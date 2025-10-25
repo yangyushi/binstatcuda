@@ -26,13 +26,15 @@ import numpy as np
 import binstatcuda as bsc
 
 n_sample = int(1e7)
-bin_edges = 
+bin_edges = np.linspace(0.0, 1.0, 128, dtype=np.float32)
+x_edges = np.linspace(0.0, 1.0, 128, dtype=np.float32)
+y_edges = np.linspace(0.0, 1.0, 64, dtype=np.float32)
 
-x = np.random.random(n_sample)
-y = np.random.random(n_sample)
+x = np.random.random(n_sample).astype(np.float32)
+y = np.random.random(n_sample).astype(np.float32)
 
 hist_1d = bsc.histogram(x, bin_edges)
-hist_2d = bsc.histogram_2d(x, y, bin_edges)
+hist_2d = bsc.histogram2d(x, y, x_edges, y_edges)
 ```
 
 ## Note

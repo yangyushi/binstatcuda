@@ -24,7 +24,7 @@ __all__ = [
     "__version__",
     "device_count",
     "histogram",
-    "histogram_2d",
+    "histogram2d",
 ]
 
 ArrayLike = npt.ArrayLike
@@ -124,7 +124,7 @@ def histogram(samples: ArrayLike, edges: ArrayLike) -> UIntArray:
     return _core.histogram(samples_arr, edges_arr)
 
 
-def histogram_2d(
+def histogram2d(
     x: ArrayLike,
     y: ArrayLike,
     x_edges: ArrayLike,
@@ -154,14 +154,14 @@ def histogram_2d(
         >>> ys = np.array([0.2, 0.6, 0.8], dtype=np.float32)
         >>> x_edges = np.array([0.0, 0.5, 1.0], dtype=np.float32)
         >>> y_edges = np.array([0.0, 0.5, 1.0], dtype=np.float32)
-        >>> histogram_2d(xs, ys, x_edges, y_edges).tolist()
+        >>> histogram2d(xs, ys, x_edges, y_edges).tolist()
         [[1, 0], [1, 1]]
     """
     x_arr = _require_float32_c_array(x, "x")
     y_arr = _require_float32_c_array(y, "y")
     x_edges_arr = _ensure_float32_c_array(x_edges, "x_edges")
     y_edges_arr = _ensure_float32_c_array(y_edges, "y_edges")
-    return _core.histogram_2d(x_arr, y_arr, x_edges_arr, y_edges_arr)
+    return _core.histogram2d(x_arr, y_arr, x_edges_arr, y_edges_arr)
 
 
 def __getattr__(name: str) -> str:

@@ -16,7 +16,7 @@ def test_histogram_matches_numpy() -> None:
     npt.assert_array_equal(result, expected.astype(np.uint64))
 
 
-def test_histogram_2d_matches_numpy() -> None:
+def test_histogram2d_matches_numpy() -> None:
     rng = np.random.default_rng(5678)
     xs = rng.normal(0.0, 1.0, size=2048).astype(np.float32)
     ys = rng.uniform(-2.0, 2.0, size=2048).astype(np.float32)
@@ -25,7 +25,7 @@ def test_histogram_2d_matches_numpy() -> None:
     y_edges = np.linspace(-2.0, 2.0, num=17, dtype=np.float32)
 
     expected, _, _ = np.histogram2d(xs, ys, bins=[x_edges, y_edges])
-    result = bsc.histogram_2d(xs, ys, x_edges, y_edges)
+    result = bsc.histogram2d(xs, ys, x_edges, y_edges)
 
     assert result.dtype == np.uint64
     assert result.shape == expected.shape
@@ -54,3 +54,13 @@ def test_histogram_accepts_float64_edges() -> None:
 
     result = bsc.histogram(samples, edges)
     assert result.sum() == samples.size
+
+
+def test_histogram2d_accepts_float64_edges() -> None:
+    xs = np.linspace(-1.0, 1.0, num=10, dtype=np.float32)
+    ys = np.linspace(-1.0, 1.0, num=10, dtype=np.float32)
+    x_edges = np.linspace(-1.0, 1.0, num=4, dtype=np.float64)
+    y_edges = np.linspace(-1.0, 1.0, num=5, dtype=np.float64)
+
+    result = bsc.histogram2d(xs, ys, x_edges, y_edges)
+    assert result.sum() == xs.size

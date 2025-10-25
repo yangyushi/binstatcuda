@@ -84,7 +84,7 @@ PYBIND11_MODULE(_core, m) {
     );
 
     m.def(
-        "histogram_2d",
+        "histogram2d",
         [](
             ContigFloatArray xs,
             ContigFloatArray ys,
@@ -162,7 +162,7 @@ PYBIND11_MODULE(_core, m) {
                 );
                 if (status != cudaSuccess) {
                     throw py::value_error(
-                        std::string("CUDA histogram_2d failed: ")
+                        std::string("CUDA histogram2d failed: ")
                         + cudaGetErrorString(status)
                     );
                 }

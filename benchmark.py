@@ -55,14 +55,14 @@ data = costs_np_2d
 print(f"{name: >16}: {np.mean(data): <4.2f} +/- {np.std(data): <4.2f} (ms)")
 
 
-costs_bsc_1d = []
-bsc.histogram_2d(x_2d[0], x_2d[1], bin_edge_2d[0], bin_edge_2d[1])
+costs_bsc_2d = []
+bsc.histogram2d(x_2d[0], x_2d[1], bin_edge_2d[0], bin_edge_2d[1])
 for _ in range(REPEAT):
     t0 = time.perf_counter()
-    bsc.histogram_2d(x_2d[0], x_2d[1], bin_edge_2d[0], bin_edge_2d[1])
+    bsc.histogram2d(x_2d[0], x_2d[1], bin_edge_2d[0], bin_edge_2d[1])
     t1 = time.perf_counter()
-    costs_bsc_1d.append(1000 * (t1 - t0))
+    costs_bsc_2d.append(1000 * (t1 - t0))
 
 name = "bsc.histogram2d"
-data = costs_bsc_1d
+data = costs_bsc_2d
 print(f"{name: >16}: {np.mean(data): <4.2f} +/- {np.std(data): <4.2f} (ms)")
