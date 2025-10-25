@@ -30,3 +30,27 @@ def test_histogram_2d_matches_numpy() -> None:
     assert result.dtype == np.uint64
     assert result.shape == expected.shape
     npt.assert_array_equal(result, expected.astype(np.uint64))
+
+
+def test_histogram_rejects_wrong_dtype() -> None:
+    samples = np.arange(4, dtype=np.float64)
+    edges = np.linspace(0.0, 4.0, num=5, dtype=np.float32)
+
+    with np.testing.assert_raises(TypeError):
+        bsc.histogram(samples, edges)
+
+
+def test_histogram_rejects_non_contiguous() -> None:
+    samples = np.arange(8, dtype=np.float32)[::2]
+    edges = np.linspace(0.0, 1.0, num=3, dtype=np.float32)
+
+    with np.testing.assert_raises(ValueError):
+        bsc.histogram(samples, edges)
+
+
+def test_histogram_accepts_float64_edges() -> None:
+    samples = np.linspace(0.0, 1.0, num=10, dtype=np.float32)
+    edges = np.linspace(0.0, 1.0, num=5, dtype=np.float64)
+
+    result = bsc.histogram(samples, edges)
+    assert result.sum() == samples.size

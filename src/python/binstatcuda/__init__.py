@@ -31,6 +31,57 @@ ArrayLike = npt.ArrayLike
 UIntArray = npt.NDArray[np.uint64]
 
 
+def _require_float32_c_array(value: ArrayLike, name: str) -> np.ndarray:
+    """
+    Validate that ``value`` is a C-contiguous float32 ndarray.
+
+    Args:
+        value (ArrayLike): Array to validate.
+        name (str): Argument name for error messaging.
+
+    Returns:
+        numpy.ndarray: The validated array (no copy performed).
+
+    Raises:
+        TypeError: If the value is not a NumPy array of dtype float32.
+        ValueError: If the array is not C-contiguous.
+    """
+    if not isinstance(value, np.ndarray):
+        raise TypeError(f"{name} must be a numpy.ndarray with dtype float32.")
+    if value.dtype != np.float32:
+        raise TypeError(f"{name} must have dtype numpy.float32.")
+    if not value.flags.c_contiguous:
+        raise ValueError(f"{name} must be C-contiguous.")
+    return value
+
+
+def _ensure_float32_c_array(value: ArrayLike, name: str) -> np.ndarray:
+    """
+    Convert ``value`` into a float32 C-contiguous ndarray.
+
+    Args:
+        value (ArrayLike): Array to coerce.
+        name (str): Argument name for error messaging.
+
+    Returns:
+        numpy.ndarray: C-contiguous float32 array (copy allowed).
+
+    Raises:
+        TypeError: If ``value`` cannot be converted to float32.
+    """
+    try:
+        array = np.ascontiguousarray(value, dtype=np.float32)
+    except TypeError as exc:
+        raise TypeError(
+            f"{name} must be convertible to numpy.float32."
+        ) from exc
+    if array.dtype != np.float32:
+        raise TypeError(f"{name} must have dtype numpy.float32.")
+    if not array.flags.c_contiguous:
+        raise ValueError(f"{name} must be C-contiguous.")
+    return array
+
+
 def device_count() -> int:
     """
     Report the number of CUDA devices visible to the runtime.
@@ -57,7 +108,9 @@ def histogram(samples: ArrayLike, edges: ArrayLike) -> UIntArray:
         numpy.ndarray: Bin counts as uint64 with shape (len(edges) - 1,).
 
     Raises:
-        ValueError: If the inputs cannot be coerced into one-dimensional arrays.
+        TypeError: If samples are not float32 NumPy arrays or edges cannot be
+            converted to float32.
+        ValueError: If the provided arrays are not C-contiguous.
 
     Examples:
         >>> import numpy as np
@@ -66,8 +119,8 @@ def histogram(samples: ArrayLike, edges: ArrayLike) -> UIntArray:
         >>> histogram(sample, edges).tolist()
         [2, 1]
     """
-    samples_arr = np.ascontiguousarray(samples, dtype=np.float32)
-    edges_arr = np.ascontiguousarray(edges, dtype=np.float32)
+    samples_arr = _require_float32_c_array(samples, "samples")
+    edges_arr = _ensure_float32_c_array(edges, "edges")
     return _core.histogram(samples_arr, edges_arr)
 
 
@@ -91,7 +144,9 @@ def histogram_2d(
         ``(len(x_edges) - 1, len(y_edges) - 1)``.
 
     Raises:
-        ValueError: If the inputs cannot be coerced into compatible arrays.
+        TypeError: If samples are not float32 NumPy arrays or edges cannot be
+            converted to float32.
+        ValueError: If the provided arrays are not C-contiguous.
 
     Examples:
         >>> import numpy as np
@@ -102,10 +157,10 @@ def histogram_2d(
         >>> histogram_2d(xs, ys, x_edges, y_edges).tolist()
         [[1, 0], [1, 1]]
     """
-    x_arr = np.ascontiguousarray(x, dtype=np.float32)
-    y_arr = np.ascontiguousarray(y, dtype=np.float32)
-    x_edges_arr = np.ascontiguousarray(x_edges, dtype=np.float32)
-    y_edges_arr = np.ascontiguousarray(y_edges, dtype=np.float32)
+    x_arr = _require_float32_c_array(x, "x")
+    y_arr = _require_float32_c_array(y, "y")
+    x_edges_arr = _ensure_float32_c_array(x_edges, "x_edges")
+    y_edges_arr = _ensure_float32_c_array(y_edges, "y_edges")
     return _core.histogram_2d(x_arr, y_arr, x_edges_arr, y_edges_arr)
 
 

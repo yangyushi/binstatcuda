@@ -15,8 +15,7 @@ constexpr const char* MODULE_DOC =
     "Core CUDA bindings for binstatcuda. "
     "Currently provides device information utilities.";
 
-using ContigFloatArray =
-    py::array_t<float, py::array::c_style | py::array::forcecast>;
+using ContigFloatArray = py::array_t<float, py::array::c_style>;
 
 }  // namespace
 
