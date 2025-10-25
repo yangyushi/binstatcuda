@@ -10,6 +10,7 @@ namespace binstatcuda {
 namespace {
 
 constexpr int THREADS_PER_BLOCK = 256;
+constexpr std::size_t MAX_SHARED_BINS = 4096;
 
 template <typename T>
 class DeviceBuffer {
@@ -91,7 +92,7 @@ __device__ __forceinline__ int find_bin(
     return bin;
 }
 
-__global__ void histogram_1d_kernel(
+__global__ void histogram_1d_global_kernel(
     const float* samples,
     std::size_t sample_count,
     const float* edges,
@@ -112,7 +113,47 @@ __global__ void histogram_1d_kernel(
     }
 }
 
-__global__ void histogram_2d_kernel(
+__global__ void histogram_1d_shared_kernel(
+    const float* samples,
+    std::size_t sample_count,
+    const float* edges,
+    int edge_count,
+    unsigned long long* counts
+) {
+    extern __shared__ unsigned long long shared_counts[];
+
+    const int bin_count = edge_count - 1;
+
+    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
+        shared_counts[idx] = 0ULL;
+    }
+    __syncthreads();
+
+    const std::size_t global_id =
+        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const std::size_t stride =
+        static_cast<std::size_t>(blockDim.x) * gridDim.x;
+
+    for (std::size_t sample_idx = global_id;
+         sample_idx < sample_count;
+         sample_idx += stride) {
+        const float value = samples[sample_idx];
+        const int bin = find_bin(value, edges, edge_count);
+        if (bin >= 0) {
+            atomicAdd(&shared_counts[bin], 1ULL);
+        }
+    }
+    __syncthreads();
+
+    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
+        const unsigned long long value = shared_counts[idx];
+        if (value != 0ULL) {
+            atomicAdd(&counts[idx], value);
+        }
+    }
+}
+
+__global__ void histogram_2d_global_kernel(
     const float* xs,
     const float* ys,
     std::size_t sample_count,
@@ -147,6 +188,59 @@ __global__ void histogram_2d_kernel(
     }
 }
 
+__global__ void histogram_2d_shared_kernel(
+    const float* xs,
+    const float* ys,
+    std::size_t sample_count,
+    const float* x_edges,
+    int x_edge_count,
+    const float* y_edges,
+    int y_edge_count,
+    unsigned long long* counts
+) {
+    const int x_bins = x_edge_count - 1;
+    const int y_bins = y_edge_count - 1;
+    const int bin_count = x_bins * y_bins;
+
+    extern __shared__ unsigned long long shared_counts[];
+
+    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
+        shared_counts[idx] = 0ULL;
+    }
+    __syncthreads();
+
+    const std::size_t global_id =
+        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const std::size_t stride =
+        static_cast<std::size_t>(blockDim.x) * gridDim.x;
+
+    for (std::size_t sample_idx = global_id;
+         sample_idx < sample_count;
+         sample_idx += stride) {
+        const int bin_x = find_bin(xs[sample_idx], x_edges, x_edge_count);
+        if (bin_x < 0) {
+            continue;
+        }
+        const int bin_y = find_bin(ys[sample_idx], y_edges, y_edge_count);
+        if (bin_y < 0) {
+            continue;
+        }
+        const std::size_t offset =
+            static_cast<std::size_t>(bin_x)
+            * static_cast<std::size_t>(y_bins)
+            + static_cast<std::size_t>(bin_y);
+        atomicAdd(&shared_counts[offset], 1ULL);
+    }
+    __syncthreads();
+
+    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
+        const unsigned long long value = shared_counts[idx];
+        if (value != 0ULL) {
+            atomicAdd(&counts[idx], value);
+        }
+    }
+}
+
 [[nodiscard]] int compute_grid_size(std::size_t sample_count) noexcept {
     if (sample_count == 0) {
         return 1;
@@ -165,13 +259,30 @@ __global__ void histogram_2d_kernel(
 ) noexcept {
     const int grid_size = compute_grid_size(sample_count);
 
-    histogram_1d_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
-        d_samples,
-        sample_count,
-        d_edges,
-        edge_count,
-        d_counts
-    );
+    const int bin_count = edge_count - 1;
+    const bool use_shared =
+        static_cast<std::size_t>(bin_count) <= MAX_SHARED_BINS;
+
+    if (use_shared) {
+        const std::size_t shared_bytes =
+            static_cast<std::size_t>(bin_count)
+            * sizeof(unsigned long long);
+        histogram_1d_shared_kernel<<<grid_size, THREADS_PER_BLOCK, shared_bytes>>>(
+            d_samples,
+            sample_count,
+            d_edges,
+            edge_count,
+            d_counts
+        );
+    } else {
+        histogram_1d_global_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
+            d_samples,
+            sample_count,
+            d_edges,
+            edge_count,
+            d_counts
+        );
+    }
 
     cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
@@ -198,16 +309,37 @@ __global__ void histogram_2d_kernel(
 ) noexcept {
     const int grid_size = compute_grid_size(sample_count);
 
-    histogram_2d_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
-        d_xs,
-        d_ys,
-        sample_count,
-        d_x_edges,
-        x_edge_count,
-        d_y_edges,
-        y_edge_count,
-        d_counts
-    );
+    const int x_bins = x_edge_count - 1;
+    const int y_bins = y_edge_count - 1;
+    const std::size_t bin_count =
+        static_cast<std::size_t>(x_bins) * static_cast<std::size_t>(y_bins);
+    const bool use_shared = bin_count <= MAX_SHARED_BINS;
+
+    if (use_shared) {
+        const std::size_t shared_bytes =
+            bin_count * sizeof(unsigned long long);
+        histogram_2d_shared_kernel<<<grid_size, THREADS_PER_BLOCK, shared_bytes>>>(
+            d_xs,
+            d_ys,
+            sample_count,
+            d_x_edges,
+            x_edge_count,
+            d_y_edges,
+            y_edge_count,
+            d_counts
+        );
+    } else {
+        histogram_2d_global_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
+            d_xs,
+            d_ys,
+            sample_count,
+            d_x_edges,
+            x_edge_count,
+            d_y_edges,
+            y_edge_count,
+            d_counts
+        );
+    }
 
     cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
