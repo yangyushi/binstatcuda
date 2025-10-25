@@ -38,6 +38,7 @@ pybind11_add_module(
     binstatcuda_core
     src/cpp/bindings.cpp
     src/cuda/device_info.cu
+    src/cuda/histogram.cu
 )
 
 target_include_directories(
