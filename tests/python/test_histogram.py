@@ -100,7 +100,7 @@ def test_histogram2d_matches_numpy() -> None:
     y_edges = np.linspace(-2.0, 2.0, num=17, dtype=np.float32)
 
     expected, _, _ = np.histogram2d(xs, ys, bins=[x_edges, y_edges])
-    result = bsc.histogram2d(xs, ys, x_edges, y_edges)
+    result = bsc.histogram2d(xs, ys, (x_edges, y_edges))
 
     assert result.dtype == np.uint64
     assert result.shape == expected.shape
@@ -123,6 +123,12 @@ def test_histogram_rejects_non_contiguous() -> None:
         bsc.histogram(samples, edges)
 
 
+def test_histogram_requires_array_bins() -> None:
+    samples = np.linspace(0.0, 1.0, num=4, dtype=np.float32)
+    with np.testing.assert_raises(TypeError):
+        bsc.histogram(samples, [0.0, 0.5, 1.0])
+
+
 def test_histogram_accepts_float64_edges() -> None:
     samples = np.linspace(0.0, 1.0, num=10, dtype=np.float32)
     edges = np.linspace(0.0, 1.0, num=5, dtype=np.float64)
@@ -137,8 +143,24 @@ def test_histogram2d_accepts_float64_edges() -> None:
     x_edges = np.linspace(-1.0, 1.0, num=4, dtype=np.float64)
     y_edges = np.linspace(-1.0, 1.0, num=5, dtype=np.float64)
 
-    result = bsc.histogram2d(xs, ys, x_edges, y_edges)
+    result = bsc.histogram2d(xs, ys, (x_edges, y_edges))
     assert result.sum() == xs.size
+
+
+def test_histogram2d_requires_tuple_bins() -> None:
+    xs = np.linspace(-1.0, 1.0, num=4, dtype=np.float32)
+    ys = np.linspace(-1.0, 1.0, num=4, dtype=np.float32)
+    edges = np.linspace(-1.0, 1.0, num=3, dtype=np.float32)
+
+    with np.testing.assert_raises(TypeError):
+        bsc.histogram2d(xs, ys, edges)  # type: ignore[arg-type]
+
+    with np.testing.assert_raises(TypeError):
+        bsc.histogram2d(
+            xs,
+            ys,
+            (edges, [-1.0, 0.0, 1.0]),  # type: ignore[arg-type]
+        )
 
 
 def test_binned_statistic_matches_reference() -> None:

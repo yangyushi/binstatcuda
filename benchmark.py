@@ -120,8 +120,7 @@ def main() -> None:
         bsc.histogram2d,
         x_2d[0],
         x_2d[1],
-        x_edges_2d,
-        y_edges_2d,
+        (x_edges_2d, y_edges_2d),
     )
 
     benchmark(

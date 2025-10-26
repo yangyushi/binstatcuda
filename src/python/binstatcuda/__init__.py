@@ -100,20 +100,20 @@ def device_count() -> int:
     return _core.device_count()
 
 
-def histogram(samples: ArrayLike, edges: ArrayLike) -> UIntArray:
+def histogram(a: ArrayLike, bins: ArrayLike) -> UIntArray:
     """
     Bin samples into 1D histogram bins on the GPU.
 
     Args:
-        samples (ArrayLike): One-dimensional sample values.
-        edges (ArrayLike): One-dimensional, strictly increasing bin edges.
+        a (ArrayLike): One-dimensional sample values.
+        bins (ArrayLike): One-dimensional NumPy array of bin edges.
 
     Returns:
-        numpy.ndarray: Bin counts as uint64 with shape (len(edges) - 1,).
+        numpy.ndarray: Bin counts as uint64 with shape (len(bins) - 1,).
 
     Raises:
-        TypeError: If samples are not float32 NumPy arrays or edges cannot be
-            converted to float32.
+        TypeError: If samples are not float32 NumPy arrays or bins are not
+            NumPy arrays of edges convertible to float32.
         ValueError: If the provided arrays are not C-contiguous.
 
     Examples:
@@ -123,16 +123,17 @@ def histogram(samples: ArrayLike, edges: ArrayLike) -> UIntArray:
         >>> histogram(sample, edges).tolist()
         [2, 1]
     """
-    samples_arr = _require_float32_c_array(samples, "samples")
-    edges_arr = _ensure_float32_c_array(edges, "edges")
+    samples_arr = _require_float32_c_array(a, "a")
+    if not isinstance(bins, np.ndarray):
+        raise TypeError("bins must be a numpy.ndarray of bin edges.")
+    edges_arr = _ensure_float32_c_array(bins, "bins")
     return _core.histogram(samples_arr, edges_arr)
 
 
 def histogram2d(
     x: ArrayLike,
     y: ArrayLike,
-    x_edges: ArrayLike,
-    y_edges: ArrayLike,
+    bins: tuple[ArrayLike, ArrayLike],
 ) -> UIntArray:
     """
     Bin paired samples into 2D histogram bins on the GPU.
@@ -140,16 +141,16 @@ def histogram2d(
     Args:
         x (ArrayLike): One-dimensional x-coordinates.
         y (ArrayLike): One-dimensional y-coordinates (same length as ``x``).
-        x_edges (ArrayLike): Bin edges for the x-axis.
-        y_edges (ArrayLike): Bin edges for the y-axis.
+        bins (tuple[ArrayLike, ArrayLike]): Tuple of NumPy arrays containing
+            the x- and y-axis bin edges.
 
     Returns:
         numpy.ndarray: Bin counts as uint64 with shape
-        ``(len(x_edges) - 1, len(y_edges) - 1)``.
+        ``(len(bins[0]) - 1, len(bins[1]) - 1)``.
 
     Raises:
-        TypeError: If samples are not float32 NumPy arrays or edges cannot be
-            converted to float32.
+        TypeError: If samples are not float32 NumPy arrays or bins are not
+            NumPy arrays of edges convertible to float32.
         ValueError: If the provided arrays are not C-contiguous.
 
     Examples:
@@ -158,13 +159,22 @@ def histogram2d(
         >>> ys = np.array([0.2, 0.6, 0.8], dtype=np.float32)
         >>> x_edges = np.array([0.0, 0.5, 1.0], dtype=np.float32)
         >>> y_edges = np.array([0.0, 0.5, 1.0], dtype=np.float32)
-        >>> histogram2d(xs, ys, x_edges, y_edges).tolist()
+        >>> histogram2d(xs, ys, (x_edges, y_edges)).tolist()
         [[1, 0], [1, 1]]
     """
     x_arr = _require_float32_c_array(x, "x")
     y_arr = _require_float32_c_array(y, "y")
-    x_edges_arr = _ensure_float32_c_array(x_edges, "x_edges")
-    y_edges_arr = _ensure_float32_c_array(y_edges, "y_edges")
+    if not isinstance(bins, tuple) or len(bins) != 2:
+        raise TypeError(
+            "bins must be a tuple of two numpy.ndarray bin edge arrays."
+        )
+    x_bins, y_bins = bins
+    if not isinstance(x_bins, np.ndarray) or not isinstance(y_bins, np.ndarray):
+        raise TypeError(
+            "bins entries must each be numpy.ndarray of bin edges."
+        )
+    x_edges_arr = _ensure_float32_c_array(x_bins, "bins[0]")
+    y_edges_arr = _ensure_float32_c_array(y_bins, "bins[1]")
     return _core.histogram2d(x_arr, y_arr, x_edges_arr, y_edges_arr)
 
 
