@@ -15,7 +15,7 @@ readme = "Readme.md"
 requires-python = ">=3.9"
 license = "MIT"
 authors = [
-    {name = "Yushi", email = "yangyushi1992@icloud.com"},
+    {name = "Yushi Yang", email = "yangyushi1992@icloud.com"},
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

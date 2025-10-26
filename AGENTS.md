@@ -8,6 +8,10 @@
 - NEVER download things to the computer.
 - You are using Linux, but try to make your code cross-platform.
 
+- I break the sandbox limitation for you. Try to use `nvidia-smi` to confirm that you can use GPU.
+- Do use the virtual environment (inside `venv` directory) if possible.
+- Always add `$HOME/.local/lib` to `LD_LIBRARY_PATH` to link correct dynamic libraries.
+
 ## Code Style
 
 ### General

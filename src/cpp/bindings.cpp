@@ -37,8 +37,7 @@ PYBIND11_MODULE(_core, m) {
                 throw py::value_error("Edges must be a one-dimensional array.");
             }
 
-            const auto sample_count =
-                static_cast<std::size_t>(sample_info.shape[0]);
+            const auto sample_count = static_cast<std::size_t>(sample_info.shape[0]);
             const int edge_count = static_cast<int>(edge_info.shape[0]);
             if (edge_count < 2) {
                 throw py::value_error("At least two edges are required.");
@@ -54,10 +53,8 @@ PYBIND11_MODULE(_core, m) {
             py::array_t<unsigned long long> counts(edge_count - 1);
             auto counts_info = counts.request();
 
-            const float* sample_ptr =
-                static_cast<const float*>(sample_info.ptr);
-            auto* count_ptr =
-                static_cast<unsigned long long*>(counts_info.ptr);
+            const float* sample_ptr = static_cast<const float*>(sample_info.ptr);
+            auto* count_ptr = static_cast<unsigned long long*>(counts_info.ptr);
 
             {
                 py::gil_scoped_release release;
@@ -95,10 +92,12 @@ PYBIND11_MODULE(_core, m) {
             if (x_info.ndim != 1) {
                 throw py::value_error("x must be a one-dimensional array.");
             }
+
             const py::buffer_info y_info = ys.request();
             if (y_info.ndim != 1) {
                 throw py::value_error("y must be a one-dimensional array.");
             }
+
             if (x_info.shape[0] != y_info.shape[0]) {
                 throw py::value_error("x and y must have the same length.");
             }
@@ -115,10 +114,8 @@ PYBIND11_MODULE(_core, m) {
                 throw py::value_error("Each axis requires at least two edges.");
             }
 
-            const float* x_edge_ptr =
-                static_cast<const float*>(x_edges_info.ptr);
-            const float* y_edge_ptr =
-                static_cast<const float*>(y_edges_info.ptr);
+            const float* x_edge_ptr = static_cast<const float*>(x_edges_info.ptr);
+            const float* y_edge_ptr = static_cast<const float*>(y_edges_info.ptr);
 
             for (int idx = 1; idx < x_edge_count; ++idx) {
                 if (x_edge_ptr[idx] <= x_edge_ptr[idx - 1]) {
@@ -145,8 +142,7 @@ PYBIND11_MODULE(_core, m) {
 
             const float* x_ptr = static_cast<const float*>(x_info.ptr);
             const float* y_ptr = static_cast<const float*>(y_info.ptr);
-            auto* count_ptr =
-                static_cast<unsigned long long*>(counts_info.ptr);
+            auto* count_ptr = static_cast<unsigned long long*>(counts_info.ptr);
 
             {
                 py::gil_scoped_release release;
@@ -176,6 +172,218 @@ PYBIND11_MODULE(_core, m) {
         py::arg("x_edges"),
         py::arg("y_edges"),
         "Compute a 2D histogram using CUDA."
+    );
+
+    m.def(
+        "binned_statistic",
+        [](
+            ContigFloatArray samples,
+            ContigFloatArray values,
+            ContigFloatArray edges
+        ) {
+            const py::buffer_info sample_info = samples.request();
+            if (sample_info.ndim != 1) {
+                throw py::value_error(
+                    "samples must be a one-dimensional array."
+                );
+            }
+            const py::buffer_info value_info = values.request();
+            if (value_info.ndim != 1) {
+                throw py::value_error(
+                    "values must be a one-dimensional array."
+                );
+            }
+            if (sample_info.shape[0] != value_info.shape[0]) {
+                throw py::value_error(
+                    "samples and values must have the same length."
+                );
+            }
+
+            const py::buffer_info edge_info = edges.request();
+            if (edge_info.ndim != 1) {
+                throw py::value_error("edges must be a one-dimensional array.");
+            }
+            const int edge_count = static_cast<int>(edge_info.shape[0]);
+            if (edge_count < 2) {
+                throw py::value_error("At least two edges are required.");
+            }
+
+            const float* edge_ptr = static_cast<const float*>(edge_info.ptr);
+            for (int idx = 1; idx < edge_count; ++idx) {
+                if (edge_ptr[idx] <= edge_ptr[idx - 1]) {
+                    throw py::value_error("edges must be strictly increasing.");
+                }
+            }
+
+            const std::size_t sample_count = static_cast<std::size_t>(sample_info.shape[0]);
+
+            py::array_t<unsigned long long> counts(edge_count - 1);
+            py::array_t<float> sums(edge_count - 1);
+            py::array_t<unsigned int> bin_numbers(sample_count);
+
+            auto counts_info = counts.request();
+            auto sums_info = sums.request();
+            auto bin_info = bin_numbers.request();
+
+            const float* sample_ptr = static_cast<const float*>(sample_info.ptr);
+            const float* value_ptr = static_cast<const float*>(value_info.ptr);
+            auto* count_ptr = static_cast<unsigned long long*>(counts_info.ptr);
+            auto* sum_ptr = static_cast<float*>(sums_info.ptr);
+            auto* bin_ptr = static_cast<unsigned int*>(bin_info.ptr);
+
+            {
+                py::gil_scoped_release release;
+                const cudaError_t status = binstatcuda::binned_statistic_1d(
+                    sample_ptr,
+                    value_ptr,
+                    sample_count,
+                    edge_ptr,
+                    edge_count,
+                    count_ptr,
+                    sum_ptr,
+                    bin_ptr
+                );
+                if (status != cudaSuccess) {
+                    throw py::value_error(
+                        std::string("CUDA binned_statistic failed: ")
+                        + cudaGetErrorString(status)
+                    );
+                }
+            }
+
+            return py::make_tuple(counts, sums, bin_numbers);
+        },
+        py::arg("samples"),
+        py::arg("values"),
+        py::arg("edges"),
+        "Compute 1D binned statistics (counts and sums) using CUDA."
+    );
+
+    m.def(
+        "binned_statistic_2d",
+        [](
+            ContigFloatArray xs,
+            ContigFloatArray ys,
+            ContigFloatArray values,
+            ContigFloatArray x_edges,
+            ContigFloatArray y_edges
+        ) {
+            const py::buffer_info x_info = xs.request();
+            if (x_info.ndim != 1) {
+                throw py::value_error("x must be a one-dimensional array.");
+            }
+            const py::buffer_info y_info = ys.request();
+            if (y_info.ndim != 1) {
+                throw py::value_error("y must be a one-dimensional array.");
+            }
+            if (x_info.shape[0] != y_info.shape[0]) {
+                throw py::value_error("x and y must have the same length.");
+            }
+
+            const py::buffer_info value_info = values.request();
+            if (value_info.ndim != 1) {
+                throw py::value_error(
+                    "values must be a one-dimensional array."
+                );
+            }
+            if (value_info.shape[0] != x_info.shape[0]) {
+                throw py::value_error(
+                    "values must have the same length as x and y."
+                );
+            }
+
+            const py::buffer_info x_edges_info = x_edges.request();
+            const py::buffer_info y_edges_info = y_edges.request();
+            if (x_edges_info.ndim != 1 || y_edges_info.ndim != 1) {
+                throw py::value_error("Edge arrays must be one-dimensional.");
+            }
+
+            const int x_edge_count = static_cast<int>(x_edges_info.shape[0]);
+            const int y_edge_count = static_cast<int>(y_edges_info.shape[0]);
+            if (x_edge_count < 2 || y_edge_count < 2) {
+                throw py::value_error(
+                    "Each axis requires at least two edges."
+                );
+            }
+
+            const float* x_edge_ptr =
+                static_cast<const float*>(x_edges_info.ptr);
+            const float* y_edge_ptr =
+                static_cast<const float*>(y_edges_info.ptr);
+
+            for (int idx = 1; idx < x_edge_count; ++idx) {
+                if (x_edge_ptr[idx] <= x_edge_ptr[idx - 1]) {
+                    throw py::value_error(
+                        "x_edges must be strictly increasing."
+                    );
+                }
+            }
+            for (int idx = 1; idx < y_edge_count; ++idx) {
+                if (y_edge_ptr[idx] <= y_edge_ptr[idx - 1]) {
+                    throw py::value_error(
+                        "y_edges must be strictly increasing."
+                    );
+                }
+            }
+
+            const std::size_t sample_count =
+                static_cast<std::size_t>(x_info.shape[0]);
+
+            py::array_t<unsigned long long> counts(
+                {x_edge_count - 1, y_edge_count - 1}
+            );
+            py::array_t<float> sums({x_edge_count - 1, y_edge_count - 1});
+            py::array_t<unsigned int> bin_numbers_x(sample_count);
+            py::array_t<unsigned int> bin_numbers_y(sample_count);
+
+            auto counts_info = counts.request();
+            auto sums_info = sums.request();
+            auto bin_x_info = bin_numbers_x.request();
+            auto bin_y_info = bin_numbers_y.request();
+
+            const float* x_ptr = static_cast<const float*>(x_info.ptr);
+            const float* y_ptr = static_cast<const float*>(y_info.ptr);
+            const float* value_ptr = static_cast<const float*>(value_info.ptr);
+            auto* count_ptr =
+                static_cast<unsigned long long*>(counts_info.ptr);
+            auto* sum_ptr = static_cast<float*>(sums_info.ptr);
+            auto* bin_x_ptr = static_cast<unsigned int*>(bin_x_info.ptr);
+            auto* bin_y_ptr = static_cast<unsigned int*>(bin_y_info.ptr);
+
+            {
+                py::gil_scoped_release release;
+                const cudaError_t status = binstatcuda::binned_statistic_2d(
+                    x_ptr,
+                    y_ptr,
+                    value_ptr,
+                    sample_count,
+                    x_edge_ptr,
+                    x_edge_count,
+                    y_edge_ptr,
+                    y_edge_count,
+                    count_ptr,
+                    sum_ptr,
+                    bin_x_ptr,
+                    bin_y_ptr
+                );
+                if (status != cudaSuccess) {
+                    throw py::value_error(
+                        std::string("CUDA binned_statistic_2d failed: ")
+                        + cudaGetErrorString(status)
+                    );
+                }
+            }
+
+            counts.resize({x_edge_count - 1, y_edge_count - 1});
+            sums.resize({x_edge_count - 1, y_edge_count - 1});
+            return py::make_tuple(counts, sums, bin_numbers_x, bin_numbers_y);
+        },
+        py::arg("x"),
+        py::arg("y"),
+        py::arg("values"),
+        py::arg("x_edges"),
+        py::arg("y_edges"),
+        "Compute 2D binned statistics (counts and sums) using CUDA."
     );
 
     m.def(
