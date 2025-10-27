@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cctype>
 #include <string>
 
 #include <cuda_runtime_api.h>
@@ -16,6 +18,25 @@ constexpr const char* MODULE_DOC =
     "Currently provides device information utilities.";
 
 using ContigFloatArray = py::array_t<float, py::array::c_style>;
+
+[[nodiscard]] binstatcuda::StatisticKind parse_statistic(
+    std::string name
+) {
+    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+    if (name == "count") {
+        return binstatcuda::StatisticKind::kCount;
+    }
+    if (name == "sum") {
+        return binstatcuda::StatisticKind::kSum;
+    }
+    if (name == "mean") {
+        return binstatcuda::StatisticKind::kMean;
+    }
+    if (name == "std") {
+        return binstatcuda::StatisticKind::kStd;
+    }
+    throw py::value_error("Unsupported statistic: " + name);
+}
 
 }  // namespace
 
@@ -179,13 +200,12 @@ PYBIND11_MODULE(_core, m) {
         [](
             ContigFloatArray samples,
             ContigFloatArray values,
-            ContigFloatArray edges
+            ContigFloatArray edges,
+            const std::string& statistic_name
         ) {
             const py::buffer_info sample_info = samples.request();
             if (sample_info.ndim != 1) {
-                throw py::value_error(
-                    "samples must be a one-dimensional array."
-                );
+                throw py::value_error("x must be a one-dimensional array.");
             }
             const py::buffer_info value_info = values.request();
             if (value_info.ndim != 1) {
@@ -195,13 +215,13 @@ PYBIND11_MODULE(_core, m) {
             }
             if (sample_info.shape[0] != value_info.shape[0]) {
                 throw py::value_error(
-                    "samples and values must have the same length."
+                    "x and values must have the same length."
                 );
             }
 
             const py::buffer_info edge_info = edges.request();
             if (edge_info.ndim != 1) {
-                throw py::value_error("edges must be a one-dimensional array.");
+                throw py::value_error("bins must be a one-dimensional array.");
             }
             const int edge_count = static_cast<int>(edge_info.shape[0]);
             if (edge_count < 2) {
@@ -211,25 +231,22 @@ PYBIND11_MODULE(_core, m) {
             const float* edge_ptr = static_cast<const float*>(edge_info.ptr);
             for (int idx = 1; idx < edge_count; ++idx) {
                 if (edge_ptr[idx] <= edge_ptr[idx - 1]) {
-                    throw py::value_error("edges must be strictly increasing.");
+                    throw py::value_error("bins must be strictly increasing.");
                 }
             }
 
-            const std::size_t sample_count = static_cast<std::size_t>(sample_info.shape[0]);
+            const std::size_t sample_count =
+                static_cast<std::size_t>(sample_info.shape[0]);
+            auto statistic = parse_statistic(statistic_name);
 
-            py::array_t<unsigned long long> counts(edge_count - 1);
-            py::array_t<float> sums(edge_count - 1);
-            py::array_t<unsigned int> bin_numbers(sample_count);
+            py::array_t<float> result(edge_count - 1);
+            auto result_info = result.request();
 
-            auto counts_info = counts.request();
-            auto sums_info = sums.request();
-            auto bin_info = bin_numbers.request();
-
-            const float* sample_ptr = static_cast<const float*>(sample_info.ptr);
-            const float* value_ptr = static_cast<const float*>(value_info.ptr);
-            auto* count_ptr = static_cast<unsigned long long*>(counts_info.ptr);
-            auto* sum_ptr = static_cast<float*>(sums_info.ptr);
-            auto* bin_ptr = static_cast<unsigned int*>(bin_info.ptr);
+            const float* sample_ptr =
+                static_cast<const float*>(sample_info.ptr);
+            const float* value_ptr =
+                static_cast<const float*>(value_info.ptr);
+            auto* result_ptr = static_cast<float*>(result_info.ptr);
 
             {
                 py::gil_scoped_release release;
@@ -239,9 +256,8 @@ PYBIND11_MODULE(_core, m) {
                     sample_count,
                     edge_ptr,
                     edge_count,
-                    count_ptr,
-                    sum_ptr,
-                    bin_ptr
+                    statistic,
+                    result_ptr
                 );
                 if (status != cudaSuccess) {
                     throw py::value_error(
@@ -251,12 +267,13 @@ PYBIND11_MODULE(_core, m) {
                 }
             }
 
-            return py::make_tuple(counts, sums, bin_numbers);
+            return result;
         },
-        py::arg("samples"),
+        py::arg("x"),
         py::arg("values"),
-        py::arg("edges"),
-        "Compute 1D binned statistics (counts and sums) using CUDA."
+        py::arg("bins"),
+        py::arg("statistic"),
+        "Compute 1D binned statistics using CUDA."
     );
 
     m.def(
@@ -266,7 +283,8 @@ PYBIND11_MODULE(_core, m) {
             ContigFloatArray ys,
             ContigFloatArray values,
             ContigFloatArray x_edges,
-            ContigFloatArray y_edges
+            ContigFloatArray y_edges,
+            const std::string& statistic_name
         ) {
             const py::buffer_info x_info = xs.request();
             if (x_info.ndim != 1) {
@@ -295,7 +313,7 @@ PYBIND11_MODULE(_core, m) {
             const py::buffer_info x_edges_info = x_edges.request();
             const py::buffer_info y_edges_info = y_edges.request();
             if (x_edges_info.ndim != 1 || y_edges_info.ndim != 1) {
-                throw py::value_error("Edge arrays must be one-dimensional.");
+                throw py::value_error("bins must be one-dimensional arrays.");
             }
 
             const int x_edge_count = static_cast<int>(x_edges_info.shape[0]);
@@ -314,41 +332,31 @@ PYBIND11_MODULE(_core, m) {
             for (int idx = 1; idx < x_edge_count; ++idx) {
                 if (x_edge_ptr[idx] <= x_edge_ptr[idx - 1]) {
                     throw py::value_error(
-                        "x_edges must be strictly increasing."
+                        "x bins must be strictly increasing."
                     );
                 }
             }
             for (int idx = 1; idx < y_edge_count; ++idx) {
                 if (y_edge_ptr[idx] <= y_edge_ptr[idx - 1]) {
                     throw py::value_error(
-                        "y_edges must be strictly increasing."
+                        "y bins must be strictly increasing."
                     );
                 }
             }
 
             const std::size_t sample_count =
                 static_cast<std::size_t>(x_info.shape[0]);
+            auto statistic = parse_statistic(statistic_name);
 
-            py::array_t<unsigned long long> counts(
+            py::array_t<float> result(
                 {x_edge_count - 1, y_edge_count - 1}
             );
-            py::array_t<float> sums({x_edge_count - 1, y_edge_count - 1});
-            py::array_t<unsigned int> bin_numbers_x(sample_count);
-            py::array_t<unsigned int> bin_numbers_y(sample_count);
-
-            auto counts_info = counts.request();
-            auto sums_info = sums.request();
-            auto bin_x_info = bin_numbers_x.request();
-            auto bin_y_info = bin_numbers_y.request();
+            auto result_info = result.request();
 
             const float* x_ptr = static_cast<const float*>(x_info.ptr);
             const float* y_ptr = static_cast<const float*>(y_info.ptr);
             const float* value_ptr = static_cast<const float*>(value_info.ptr);
-            auto* count_ptr =
-                static_cast<unsigned long long*>(counts_info.ptr);
-            auto* sum_ptr = static_cast<float*>(sums_info.ptr);
-            auto* bin_x_ptr = static_cast<unsigned int*>(bin_x_info.ptr);
-            auto* bin_y_ptr = static_cast<unsigned int*>(bin_y_info.ptr);
+            auto* result_ptr = static_cast<float*>(result_info.ptr);
 
             {
                 py::gil_scoped_release release;
@@ -361,10 +369,8 @@ PYBIND11_MODULE(_core, m) {
                     x_edge_count,
                     y_edge_ptr,
                     y_edge_count,
-                    count_ptr,
-                    sum_ptr,
-                    bin_x_ptr,
-                    bin_y_ptr
+                    statistic,
+                    result_ptr
                 );
                 if (status != cudaSuccess) {
                     throw py::value_error(
@@ -374,16 +380,16 @@ PYBIND11_MODULE(_core, m) {
                 }
             }
 
-            counts.resize({x_edge_count - 1, y_edge_count - 1});
-            sums.resize({x_edge_count - 1, y_edge_count - 1});
-            return py::make_tuple(counts, sums, bin_numbers_x, bin_numbers_y);
+            result.resize({x_edge_count - 1, y_edge_count - 1});
+            return result;
         },
         py::arg("x"),
         py::arg("y"),
         py::arg("values"),
-        py::arg("x_edges"),
-        py::arg("y_edges"),
-        "Compute 2D binned statistics (counts and sums) using CUDA."
+        py::arg("x_bins"),
+        py::arg("y_bins"),
+        py::arg("statistic"),
+        "Compute 2D binned statistics using CUDA."
     );
 
     m.def(

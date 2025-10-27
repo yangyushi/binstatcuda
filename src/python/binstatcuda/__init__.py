@@ -34,6 +34,15 @@ UIntArray = npt.NDArray[np.uint64]
 FloatArray = npt.NDArray[np.float32]
 UInt32Array = npt.NDArray[np.uint32]
 
+_VALID_STATISTICS: frozenset[str] = frozenset(
+    {
+        "count",
+        "sum",
+        "mean",
+        "std",
+    }
+)
+
 
 def _require_float32_c_array(value: ArrayLike, name: str) -> np.ndarray:
     """
@@ -84,6 +93,31 @@ def _ensure_float32_c_array(value: ArrayLike, name: str) -> np.ndarray:
     if not array.flags.c_contiguous:
         raise ValueError(f"{name} must be C-contiguous.")
     return array
+
+
+def _normalize_statistic(statistic: str) -> str:
+    """
+    Normalize and validate the statistic name.
+
+    Args:
+        statistic (str): Name of the statistic to compute.
+
+    Returns:
+        str: Lower-case statistic name.
+
+    Raises:
+        TypeError: If ``statistic`` is not a string.
+        ValueError: If the statistic is unsupported.
+    """
+    if not isinstance(statistic, str):
+        raise TypeError("statistic must be a string.")
+    normalized = statistic.lower()
+    if normalized not in _VALID_STATISTICS:
+        raise ValueError(
+            f"Unsupported statistic {statistic!r}. "
+            f"Valid options are: {sorted(_VALID_STATISTICS)}."
+        )
+    return normalized
 
 
 def device_count() -> int:
@@ -179,103 +213,124 @@ def histogram2d(
 
 
 def binned_statistic(
-    samples: ArrayLike,
+    x: ArrayLike,
     values: ArrayLike,
-    edges: ArrayLike,
-) -> tuple[UIntArray, FloatArray, UInt32Array]:
+    statistic: str = "mean",
+    bins: ArrayLike | None = None,
+) -> FloatArray:
     """
-    Compute 1D bin counts and sums on the GPU.
+    Compute a 1D binned statistic on the GPU.
 
     Args:
-        samples (ArrayLike): Sample coordinates.
-        values (ArrayLike): Values associated with each sample.
-        edges (ArrayLike): Histogram bin edges.
+        x (ArrayLike): Sample coordinates.
+        values (ArrayLike): Values associated with each coordinate.
+        statistic (str): Statistic to compute (``count``, ``sum``, ``mean``,
+            or ``std``).
+        bins (ArrayLike | None): Histogram bin edges. ``None`` is unsupported
+            and will raise ``ValueError``.
 
     Returns:
-        tuple: ``(counts, sums, bin_numbers)`` where counts is uint64 with
-        shape ``(len(edges) - 1,)``, sums is float32 with the same shape, and
-        bin_numbers is uint32 with shape ``(len(samples),)``.
+        numpy.ndarray: The per-bin statistic as float32 with shape
+        ``(len(bins) - 1,)``.
 
     Raises:
-        TypeError: If inputs are not C-contiguous float32 arrays.
-        ValueError: If array dimensionalities or sizes do not match.
+        TypeError: If inputs are not C-contiguous float32 arrays or statistic
+            is not a string.
+        ValueError: If array dimensionalities or sizes do not match, if bins
+            are missing, or if the statistic is unsupported.
 
     Examples:
         >>> import numpy as np
         >>> coords = np.array([0.1, 0.4, 0.9], dtype=np.float32)
         >>> vals = np.array([1.0, 2.0, 3.0], dtype=np.float32)
         >>> edges = np.array([0.0, 0.5, 1.0], dtype=np.float32)
-        >>> counts, sums, bins = binned_statistic(coords, vals, edges)
-        >>> counts.tolist()
-        [2, 1]
-        >>> sums.tolist()
-        [3.0, 3.0]
-        >>> bins.tolist()
-        [0, 0, 1]
+        >>> binned_statistic(coords, vals, statistic="mean", bins=edges).tolist()
+        [1.5, 3.0]
     """
-    samples_arr = _require_float32_c_array(samples, "samples")
-    values_arr = _require_float32_c_array(values, "values")
-    edges_arr = _ensure_float32_c_array(edges, "edges")
+    if bins is None:
+        raise ValueError("bins must be provided.")
 
-    if samples_arr.ndim != 1:
-        raise ValueError("samples must be one-dimensional.")
+    x_arr = _require_float32_c_array(x, "x")
+    values_arr = _require_float32_c_array(values, "values")
+    if not isinstance(bins, np.ndarray):
+        raise TypeError("bins must be a numpy.ndarray of bin edges.")
+    bins_arr = _ensure_float32_c_array(bins, "bins")
+    name = _normalize_statistic(statistic)
+
+    if x_arr.ndim != 1:
+        raise ValueError("x must be one-dimensional.")
     if values_arr.ndim != 1:
         raise ValueError("values must be one-dimensional.")
-    if samples_arr.shape[0] != values_arr.shape[0]:
-        raise ValueError("samples and values must have the same length.")
+    if x_arr.shape[0] != values_arr.shape[0]:
+        raise ValueError("x and values must have the same length.")
 
-    counts, sums, bin_numbers = _core.binned_statistic(
-        samples_arr,
+    return _core.binned_statistic(
+        x_arr,
         values_arr,
-        edges_arr,
+        bins_arr,
+        name,
     )
-    return counts, sums, bin_numbers
 
 
 def binned_statistic_2d(
     x: ArrayLike,
     y: ArrayLike,
     values: ArrayLike,
-    x_edges: ArrayLike,
-    y_edges: ArrayLike,
-) -> tuple[UIntArray, FloatArray, UInt32Array, UInt32Array]:
+    statistic: str = "mean",
+    bins: tuple[ArrayLike, ArrayLike] | None = None,
+) -> FloatArray:
     """
-    Compute 2D bin counts and sums on the GPU.
+    Compute a 2D binned statistic on the GPU.
 
     Args:
         x (ArrayLike): Sample x-coordinates.
-        y (ArrayLike): Sample y-coordinates.
-        values (ArrayLike): Values associated with each sample.
-        x_edges (ArrayLike): Histogram bin edges along the x-axis.
-        y_edges (ArrayLike): Histogram bin edges along the y-axis.
+        y (ArrayLike): Sample y-coordinates (must match ``x`` length).
+        values (ArrayLike): Values associated with each coordinate pair.
+        statistic (str): Statistic to compute (``count``, ``sum``, ``mean``,
+            ``std``, ``median``, ``min``, or ``max``).
+        bins (tuple[ArrayLike, ArrayLike] | None): Tuple containing the x- and
+            y-axis bin edges. ``None`` is unsupported and will raise
+            ``ValueError``.
 
     Returns:
-        tuple: ``(counts, sums, bin_numbers_x, bin_numbers_y)`` where counts
-        and sums have shape ``(len(x_edges) - 1, len(y_edges) - 1)``, and the
-        bin number arrays have shape ``(len(x),)``.
+        numpy.ndarray: The per-bin statistic as float32 with shape
+        ``(len(bins[0]) - 1, len(bins[1]) - 1)``.
 
     Raises:
-        TypeError: If inputs are not C-contiguous float32 arrays.
-        ValueError: If dimensionalities or lengths do not match.
+        TypeError: If inputs are not C-contiguous float32 arrays or statistic
+            is not a string.
+        ValueError: If dimensionalities, lengths, or statistic name are
+            invalid, or if bins are not supplied.
 
     Examples:
         >>> import numpy as np
         >>> xs = np.array([0.1, 0.4, 0.9], dtype=np.float32)
         >>> ys = np.array([0.2, 0.6, 0.8], dtype=np.float32)
         >>> vals = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        >>> x_edges = np.array([0.0, 0.5, 1.0], dtype=np.float32)
-        >>> y_edges = np.array([0.0, 0.5, 1.0], dtype=np.float32)
-        >>> out = binned_statistic_2d(xs, ys, vals, x_edges, y_edges)
-        >>> out[0].tolist()
-        [[1, 0], [1, 1]]
-        >>> out[1].tolist()
+        >>> xb = np.array([0.0, 0.5, 1.0], dtype=np.float32)
+        >>> yb = np.array([0.0, 0.5, 1.0], dtype=np.float32)
+        >>> binned_statistic_2d(xs, ys, vals, statistic="sum", bins=(xb, yb)).tolist()
         [[1.0, 0.0], [2.0, 3.0]]
     """
+    if bins is None:
+        raise ValueError("bins must be provided.")
+    if not isinstance(bins, tuple) or len(bins) != 2:
+        raise TypeError(
+            "bins must be a tuple of two numpy.ndarray bin edge arrays."
+        )
+
     x_arr = _require_float32_c_array(x, "x")
     y_arr = _require_float32_c_array(y, "y")
     values_arr = _require_float32_c_array(values, "values")
-    x_edges_arr = _ensure_float32_c_array(x_edges, "x_edges")
-    y_edges_arr = _ensure_float32_c_array(y_edges, "y_edges")
+    name = _normalize_statistic(statistic)
+
+    x_bins, y_bins = bins
+    if not isinstance(x_bins, np.ndarray) or not isinstance(y_bins, np.ndarray):
+        raise TypeError(
+            "bins entries must each be numpy.ndarray of bin edges."
+        )
+    x_edges_arr = _ensure_float32_c_array(x_bins, "bins[0]")
+    y_edges_arr = _ensure_float32_c_array(y_bins, "bins[1]")
 
     if x_arr.ndim != 1:
         raise ValueError("x must be one-dimensional.")
@@ -288,14 +343,14 @@ def binned_statistic_2d(
     if values_arr.shape[0] != x_arr.shape[0]:
         raise ValueError("values must match the length of x and y.")
 
-    counts, sums, bin_numbers_x, bin_numbers_y = _core.binned_statistic_2d(
+    return _core.binned_statistic_2d(
         x_arr,
         y_arr,
         values_arr,
         x_edges_arr,
         y_edges_arr,
+        name,
     )
-    return counts, sums, bin_numbers_x, bin_numbers_y
 
 
 def __getattr__(name: str) -> str:

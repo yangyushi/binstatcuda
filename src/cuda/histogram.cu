@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cfloat>
+#include <cmath>
+#include <limits>
+#include <vector>
 
 #include <cuda_runtime.h>
 
@@ -237,7 +241,7 @@ __global__ void histogram_2d_shared_kernel(
     }
 }
 
-__global__ void binned_statistic_1d_global_kernel(
+__global__ void binned_statistic_1d_kernel(
     const float* samples,
     const float* values,
     std::size_t sample_count,
@@ -245,7 +249,8 @@ __global__ void binned_statistic_1d_global_kernel(
     int edge_count,
     unsigned long long* counts,
     float* sums,
-    unsigned int* bin_numbers
+    float* sum_squares,
+    int* bin_numbers
 ) {
     const std::size_t global_id =
         static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -253,70 +258,31 @@ __global__ void binned_statistic_1d_global_kernel(
         static_cast<std::size_t>(blockDim.x) * gridDim.x;
 
     for (std::size_t idx = global_id; idx < sample_count; idx += stride) {
-        const int bin = find_bin(samples[idx], edges, edge_count);
-        const unsigned int bin_number =
-            bin >= 0 ? static_cast<unsigned int>(bin + 1) : 0U;
-        bin_numbers[idx] = bin_number;
+        const float sample = samples[idx];
+        const int bin = find_bin(sample, edges, edge_count);
+
+        if (bin_numbers != nullptr) {
+            bin_numbers[idx] = bin;
+        }
         if (bin < 0) {
             continue;
         }
 
         atomicAdd(&counts[bin], 1ULL);
-        atomicAdd(&sums[bin], values[idx]);
-    }
-}
 
-__global__ void binned_statistic_1d_shared_kernel(
-    const float* samples,
-    const float* values,
-    std::size_t sample_count,
-    const float* edges,
-    int edge_count,
-    unsigned long long* counts,
-    float* sums,
-    unsigned int* bin_numbers
-) {
-    const int bin_count = edge_count - 1;
-    extern __shared__ unsigned char shared_storage[];
-    auto* shared_counts =
-        reinterpret_cast<unsigned long long*>(shared_storage);
-    float* shared_sums =
-        reinterpret_cast<float*>(shared_counts + bin_count);
-
-    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
-        shared_counts[idx] = 0ULL;
-        shared_sums[idx] = 0.0F;
-    }
-    __syncthreads();
-
-    const std::size_t global_id =
-        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const std::size_t stride =
-        static_cast<std::size_t>(blockDim.x) * gridDim.x;
-
-    for (std::size_t sample_idx = global_id;
-         sample_idx < sample_count;
-         sample_idx += stride) {
-        const int bin = find_bin(samples[sample_idx], edges, edge_count);
-        const unsigned int bin_number =
-            bin >= 0 ? static_cast<unsigned int>(bin + 1) : 0U;
-        bin_numbers[sample_idx] = bin_number;
-        if (bin < 0) {
-            continue;
+        if (sums != nullptr || sum_squares != nullptr) {
+            const float value = values[idx];
+            if (sums != nullptr) {
+                atomicAdd(&sums[bin], value);
+            }
+            if (sum_squares != nullptr) {
+                atomicAdd(&sum_squares[bin], value * value);
+            }
         }
-
-        atomicAdd(&shared_counts[bin], 1ULL);
-        atomicAdd(&shared_sums[bin], values[sample_idx]);
-    }
-    __syncthreads();
-
-    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
-        atomicAdd(&counts[idx], shared_counts[idx]);
-        atomicAdd(&sums[idx], shared_sums[idx]);
     }
 }
 
-__global__ void binned_statistic_2d_global_kernel(
+__global__ void binned_statistic_2d_kernel(
     const float* xs,
     const float* ys,
     const float* values,
@@ -327,8 +293,8 @@ __global__ void binned_statistic_2d_global_kernel(
     int y_edge_count,
     unsigned long long* counts,
     float* sums,
-    unsigned int* bin_numbers_x,
-    unsigned int* bin_numbers_y
+    float* sum_squares,
+    int* bin_numbers
 ) {
     const std::size_t global_id =
         static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -340,15 +306,16 @@ __global__ void binned_statistic_2d_global_kernel(
     for (std::size_t idx = global_id; idx < sample_count; idx += stride) {
         const int bin_x = find_bin(xs[idx], x_edges, x_edge_count);
         const int bin_y = find_bin(ys[idx], y_edges, y_edge_count);
+        const bool valid = (bin_x >= 0) && (bin_y >= 0);
 
-        const unsigned int bin_number_x =
-            bin_x >= 0 ? static_cast<unsigned int>(bin_x + 1) : 0U;
-        const unsigned int bin_number_y =
-            bin_y >= 0 ? static_cast<unsigned int>(bin_y + 1) : 0U;
-        bin_numbers_x[idx] = bin_number_x;
-        bin_numbers_y[idx] = bin_number_y;
+        if (bin_numbers != nullptr) {
+            const int flattened = valid
+                ? bin_x * y_bins + bin_y
+                : -1;
+            bin_numbers[idx] = flattened;
+        }
 
-        if (bin_x < 0 || bin_y < 0) {
+        if (!valid) {
             continue;
         }
 
@@ -358,75 +325,16 @@ __global__ void binned_statistic_2d_global_kernel(
             + static_cast<std::size_t>(bin_y);
 
         atomicAdd(&counts[offset], 1ULL);
-        atomicAdd(&sums[offset], values[idx]);
-    }
-}
 
-__global__ void binned_statistic_2d_shared_kernel(
-    const float* xs,
-    const float* ys,
-    const float* values,
-    std::size_t sample_count,
-    const float* x_edges,
-    int x_edge_count,
-    const float* y_edges,
-    int y_edge_count,
-    unsigned long long* counts,
-    float* sums,
-    unsigned int* bin_numbers_x,
-    unsigned int* bin_numbers_y
-) {
-    const int x_bins = x_edge_count - 1;
-    const int y_bins = y_edge_count - 1;
-    const int bin_count = x_bins * y_bins;
-
-    extern __shared__ unsigned char shared_storage[];
-    auto* shared_counts =
-        reinterpret_cast<unsigned long long*>(shared_storage);
-    float* shared_sums =
-        reinterpret_cast<float*>(shared_counts + bin_count);
-
-    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
-        shared_counts[idx] = 0ULL;
-        shared_sums[idx] = 0.0F;
-    }
-    __syncthreads();
-
-    const std::size_t global_id =
-        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const std::size_t stride =
-        static_cast<std::size_t>(blockDim.x) * gridDim.x;
-
-    for (std::size_t sample_idx = global_id;
-         sample_idx < sample_count;
-         sample_idx += stride) {
-        const int bin_x = find_bin(xs[sample_idx], x_edges, x_edge_count);
-        const int bin_y = find_bin(ys[sample_idx], y_edges, y_edge_count);
-
-        const unsigned int bin_number_x =
-            bin_x >= 0 ? static_cast<unsigned int>(bin_x + 1) : 0U;
-        const unsigned int bin_number_y =
-            bin_y >= 0 ? static_cast<unsigned int>(bin_y + 1) : 0U;
-        bin_numbers_x[sample_idx] = bin_number_x;
-        bin_numbers_y[sample_idx] = bin_number_y;
-
-        if (bin_x < 0 || bin_y < 0) {
-            continue;
+        if (sums != nullptr || sum_squares != nullptr) {
+            const float value = values[idx];
+            if (sums != nullptr) {
+                atomicAdd(&sums[offset], value);
+            }
+            if (sum_squares != nullptr) {
+                atomicAdd(&sum_squares[offset], value * value);
+            }
         }
-
-        const std::size_t offset =
-            static_cast<std::size_t>(bin_x)
-            * static_cast<std::size_t>(y_bins)
-            + static_cast<std::size_t>(bin_y);
-
-        atomicAdd(&shared_counts[offset], 1ULL);
-        atomicAdd(&shared_sums[offset], values[sample_idx]);
-    }
-    __syncthreads();
-
-    for (int idx = threadIdx.x; idx < bin_count; idx += blockDim.x) {
-        atomicAdd(&counts[idx], shared_counts[idx]);
-        atomicAdd(&sums[idx], shared_sums[idx]);
     }
 }
 
@@ -551,39 +459,22 @@ __global__ void binned_statistic_2d_shared_kernel(
     int edge_count,
     unsigned long long* d_counts,
     float* d_sums,
-    unsigned int* d_bin_numbers
+    float* d_sumsq,
+    int* d_bin_numbers
 ) noexcept {
     const int grid_size = compute_grid_size(sample_count);
-    const int bin_count = edge_count - 1;
-    const bool use_shared =
-        static_cast<std::size_t>(bin_count) <= MAX_SHARED_BINS;
 
-    if (use_shared) {
-        const std::size_t shared_bytes =
-            static_cast<std::size_t>(bin_count)
-            * (sizeof(unsigned long long) + sizeof(float));
-        binned_statistic_1d_shared_kernel<<<grid_size, THREADS_PER_BLOCK, shared_bytes>>>(
-            d_samples,
-            d_values,
-            sample_count,
-            d_edges,
-            edge_count,
-            d_counts,
-            d_sums,
-            d_bin_numbers
-        );
-    } else {
-        binned_statistic_1d_global_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
-            d_samples,
-            d_values,
-            sample_count,
-            d_edges,
-            edge_count,
-            d_counts,
-            d_sums,
-            d_bin_numbers
-        );
-    }
+    binned_statistic_1d_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
+        d_samples,
+        d_values,
+        sample_count,
+        d_edges,
+        edge_count,
+        d_counts,
+        d_sums,
+        d_sumsq,
+        d_bin_numbers
+    );
 
     cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
@@ -609,50 +500,25 @@ __global__ void binned_statistic_2d_shared_kernel(
     int y_edge_count,
     unsigned long long* d_counts,
     float* d_sums,
-    unsigned int* d_bin_numbers_x,
-    unsigned int* d_bin_numbers_y
+    float* d_sumsq,
+    int* d_bin_numbers
 ) noexcept {
     const int grid_size = compute_grid_size(sample_count);
 
-    const int x_bins = x_edge_count - 1;
-    const int y_bins = y_edge_count - 1;
-    const std::size_t bin_count =
-        static_cast<std::size_t>(x_bins) * static_cast<std::size_t>(y_bins);
-    const bool use_shared = bin_count <= MAX_SHARED_BINS;
-
-    if (use_shared) {
-        const std::size_t shared_bytes =
-            bin_count * (sizeof(unsigned long long) + sizeof(float));
-        binned_statistic_2d_shared_kernel<<<grid_size, THREADS_PER_BLOCK, shared_bytes>>>(
-            d_xs,
-            d_ys,
-            d_values,
-            sample_count,
-            d_x_edges,
-            x_edge_count,
-            d_y_edges,
-            y_edge_count,
-            d_counts,
-            d_sums,
-            d_bin_numbers_x,
-            d_bin_numbers_y
-        );
-    } else {
-        binned_statistic_2d_global_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
-            d_xs,
-            d_ys,
-            d_values,
-            sample_count,
-            d_x_edges,
-            x_edge_count,
-            d_y_edges,
-            y_edge_count,
-            d_counts,
-            d_sums,
-            d_bin_numbers_x,
-            d_bin_numbers_y
-        );
-    }
+    binned_statistic_2d_kernel<<<grid_size, THREADS_PER_BLOCK>>>(
+        d_xs,
+        d_ys,
+        d_values,
+        sample_count,
+        d_x_edges,
+        x_edge_count,
+        d_y_edges,
+        y_edge_count,
+        d_counts,
+        d_sums,
+        d_sumsq,
+        d_bin_numbers
+    );
 
     cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
@@ -897,75 +763,78 @@ cudaError_t binned_statistic_1d(
     std::size_t sample_count,
     const float* host_edges,
     int edge_count,
-    unsigned long long* host_counts,
-    float* host_sums,
-    unsigned int* host_bin_numbers
+    StatisticKind statistic,
+    float* host_result
 ) noexcept {
+    if (host_result == nullptr) {
+        return cudaErrorInvalidValue;
+    }
     if (edge_count < 2) {
         return cudaErrorInvalidValue;
     }
 
     const int bin_count = edge_count - 1;
-    std::fill(host_counts, host_counts + bin_count, 0ULL);
-    std::fill(host_sums, host_sums + bin_count, 0.0F);
-    if (sample_count > 0U && host_bin_numbers != nullptr) {
-        std::fill(host_bin_numbers, host_bin_numbers + sample_count, 0U);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+
+    if (statistic == StatisticKind::kCount
+        || statistic == StatisticKind::kSum) {
+        std::fill(host_result, host_result + bin_count, 0.0F);
+    } else {
+        std::fill(host_result, host_result + bin_count, nan);
     }
 
-    if (sample_count == 0) {
+    if (bin_count == 0 || sample_count == 0) {
         return cudaSuccess;
     }
 
+    const bool needs_sum = statistic == StatisticKind::kSum
+        || statistic == StatisticKind::kMean
+        || statistic == StatisticKind::kStd;
+    const bool needs_sumsq = statistic == StatisticKind::kStd;
+    const bool needs_values = needs_sum || needs_sumsq;
+
     DeviceBuffer<float> d_samples;
-    DeviceBuffer<float> d_values;
     DeviceBuffer<float> d_edges;
     DeviceBuffer<unsigned long long> d_counts;
+    DeviceBuffer<float> d_values;
     DeviceBuffer<float> d_sums;
-    DeviceBuffer<unsigned int> d_bin_numbers;
+    DeviceBuffer<float> d_sumsq;
 
     cudaError_t status = d_samples.allocate(sample_count);
     if (status != cudaSuccess) {
         return status;
     }
-
-    status = d_values.allocate(sample_count);
-    if (status != cudaSuccess) {
-        return status;
-    }
-
     status = d_edges.allocate(edge_count);
     if (status != cudaSuccess) {
         return status;
     }
-
     status = d_counts.allocate(bin_count);
     if (status != cudaSuccess) {
         return status;
     }
 
-    status = d_sums.allocate(bin_count);
-    if (status != cudaSuccess) {
-        return status;
+    if (needs_values) {
+        status = d_values.allocate(sample_count);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
-
-    status = d_bin_numbers.allocate(sample_count);
-    if (status != cudaSuccess) {
-        return status;
+    if (needs_sum) {
+        status = d_sums.allocate(bin_count);
+        if (status != cudaSuccess) {
+            return status;
+        }
+    }
+    if (needs_sumsq) {
+        status = d_sumsq.allocate(bin_count);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
     status = cudaMemcpy(
         d_samples.get(),
         host_samples,
-        sample_count * sizeof(float),
-        cudaMemcpyHostToDevice
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-
-    status = cudaMemcpy(
-        d_values.get(),
-        host_values,
         sample_count * sizeof(float),
         cudaMemcpyHostToDevice
     );
@@ -983,6 +852,18 @@ cudaError_t binned_statistic_1d(
         return status;
     }
 
+    if (needs_values) {
+        status = cudaMemcpy(
+            d_values.get(),
+            host_values,
+            sample_count * sizeof(float),
+            cudaMemcpyHostToDevice
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
+    }
+
     status = cudaMemset(
         d_counts.get(),
         0,
@@ -992,31 +873,49 @@ cudaError_t binned_statistic_1d(
         return status;
     }
 
-    status = cudaMemset(
-        d_sums.get(),
-        0,
-        static_cast<std::size_t>(bin_count) * sizeof(float)
-    );
-    if (status != cudaSuccess) {
-        return status;
+    if (needs_sum) {
+        status = cudaMemset(
+            d_sums.get(),
+            0,
+            static_cast<std::size_t>(bin_count) * sizeof(float)
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
+    }
+
+    if (needs_sumsq) {
+        status = cudaMemset(
+            d_sumsq.get(),
+            0,
+            static_cast<std::size_t>(bin_count) * sizeof(float)
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
     status = launch_binned_statistic_1d(
         d_samples.get(),
-        d_values.get(),
+        needs_values ? d_values.get() : nullptr,
         sample_count,
         d_edges.get(),
         edge_count,
         d_counts.get(),
-        d_sums.get(),
-        d_bin_numbers.get()
+        needs_sum ? d_sums.get() : nullptr,
+        needs_sumsq ? d_sumsq.get() : nullptr,
+        nullptr
     );
     if (status != cudaSuccess) {
         return status;
     }
 
+    std::vector<unsigned long long> host_counts(
+        static_cast<std::size_t>(bin_count),
+        0ULL
+    );
     status = cudaMemcpy(
-        host_counts,
+        host_counts.data(),
         d_counts.get(),
         static_cast<std::size_t>(bin_count) * sizeof(unsigned long long),
         cudaMemcpyDeviceToHost
@@ -1025,24 +924,76 @@ cudaError_t binned_statistic_1d(
         return status;
     }
 
-    status = cudaMemcpy(
-        host_sums,
-        d_sums.get(),
-        static_cast<std::size_t>(bin_count) * sizeof(float),
-        cudaMemcpyDeviceToHost
-    );
-    if (status != cudaSuccess) {
-        return status;
+    std::vector<float> host_sums;
+    if (needs_sum) {
+        host_sums.resize(bin_count);
+        status = cudaMemcpy(
+            host_sums.data(),
+            d_sums.get(),
+            static_cast<std::size_t>(bin_count) * sizeof(float),
+            cudaMemcpyDeviceToHost
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
-    status = cudaMemcpy(
-        host_bin_numbers,
-        d_bin_numbers.get(),
-        sample_count * sizeof(unsigned int),
-        cudaMemcpyDeviceToHost
-    );
-    if (status != cudaSuccess) {
-        return status;
+    std::vector<float> host_sumsq;
+    if (needs_sumsq) {
+        host_sumsq.resize(bin_count);
+        status = cudaMemcpy(
+            host_sumsq.data(),
+            d_sumsq.get(),
+            static_cast<std::size_t>(bin_count) * sizeof(float),
+            cudaMemcpyDeviceToHost
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
+    }
+
+    switch (statistic) {
+    case StatisticKind::kCount:
+        for (int bin = 0; bin < bin_count; ++bin) {
+            host_result[bin] = static_cast<float>(host_counts[bin]);
+        }
+        break;
+    case StatisticKind::kSum:
+        std::copy(host_sums.begin(), host_sums.end(), host_result);
+        break;
+    case StatisticKind::kMean:
+        for (int bin = 0; bin < bin_count; ++bin) {
+            const unsigned long long count = host_counts[bin];
+            if (count == 0ULL) {
+                host_result[bin] = nan;
+            } else {
+                host_result[bin] =
+                    host_sums[bin] / static_cast<float>(count);
+            }
+        }
+        break;
+    case StatisticKind::kStd:
+        for (int bin = 0; bin < bin_count; ++bin) {
+            const unsigned long long count = host_counts[bin];
+            if (count == 0ULL) {
+                host_result[bin] = nan;
+                continue;
+            }
+            if (count == 1ULL) {
+                host_result[bin] = 0.0F;
+                continue;
+            }
+            const double count_d = static_cast<double>(count);
+            const double sum_d = static_cast<double>(host_sums[bin]);
+            const double sumsq_d = static_cast<double>(host_sumsq[bin]);
+            const double mean = sum_d / count_d;
+            double variance = sumsq_d / count_d - mean * mean;
+            variance = variance < 0.0 ? 0.0 : variance;
+            host_result[bin] = static_cast<float>(std::sqrt(variance));
+        }
+        break;
+    default:
+        return cudaErrorInvalidValue;
     }
 
     return cudaSuccess;
@@ -1057,11 +1008,12 @@ cudaError_t binned_statistic_2d(
     int x_edge_count,
     const float* host_y_edges,
     int y_edge_count,
-    unsigned long long* host_counts,
-    float* host_sums,
-    unsigned int* host_bin_numbers_x,
-    unsigned int* host_bin_numbers_y
+    StatisticKind statistic,
+    float* host_result
 ) noexcept {
+    if (host_result == nullptr) {
+        return cudaErrorInvalidValue;
+    }
     if (x_edge_count < 2 || y_edge_count < 2) {
         return cudaErrorInvalidValue;
     }
@@ -1071,75 +1023,74 @@ cudaError_t binned_statistic_2d(
     const std::size_t total_bins =
         static_cast<std::size_t>(x_bin_count)
         * static_cast<std::size_t>(y_bin_count);
+    if (total_bins == 0) {
+        return cudaSuccess;
+    }
 
-    std::fill(host_counts, host_counts + total_bins, 0ULL);
-    std::fill(host_sums, host_sums + total_bins, 0.0F);
-    if (sample_count > 0U) {
-        if (host_bin_numbers_x != nullptr) {
-            std::fill(host_bin_numbers_x, host_bin_numbers_x + sample_count, 0U);
-        }
-        if (host_bin_numbers_y != nullptr) {
-            std::fill(host_bin_numbers_y, host_bin_numbers_y + sample_count, 0U);
-        }
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    if (statistic == StatisticKind::kCount
+        || statistic == StatisticKind::kSum) {
+        std::fill(host_result, host_result + total_bins, 0.0F);
+    } else {
+        std::fill(host_result, host_result + total_bins, nan);
     }
 
     if (sample_count == 0) {
         return cudaSuccess;
     }
 
+    const bool needs_sum = statistic == StatisticKind::kSum
+        || statistic == StatisticKind::kMean
+        || statistic == StatisticKind::kStd;
+    const bool needs_sumsq = statistic == StatisticKind::kStd;
+    const bool needs_values = needs_sum || needs_sumsq;
+
     DeviceBuffer<float> d_x;
     DeviceBuffer<float> d_y;
-    DeviceBuffer<float> d_values;
     DeviceBuffer<float> d_x_edges;
     DeviceBuffer<float> d_y_edges;
     DeviceBuffer<unsigned long long> d_counts;
+    DeviceBuffer<float> d_values;
     DeviceBuffer<float> d_sums;
-    DeviceBuffer<unsigned int> d_bin_numbers_x;
-    DeviceBuffer<unsigned int> d_bin_numbers_y;
+    DeviceBuffer<float> d_sumsq;
 
     cudaError_t status = d_x.allocate(sample_count);
     if (status != cudaSuccess) {
         return status;
     }
-
     status = d_y.allocate(sample_count);
     if (status != cudaSuccess) {
         return status;
     }
-
-    status = d_values.allocate(sample_count);
-    if (status != cudaSuccess) {
-        return status;
-    }
-
     status = d_x_edges.allocate(x_edge_count);
     if (status != cudaSuccess) {
         return status;
     }
-
     status = d_y_edges.allocate(y_edge_count);
     if (status != cudaSuccess) {
         return status;
     }
-
     status = d_counts.allocate(total_bins);
     if (status != cudaSuccess) {
         return status;
     }
-
-    status = d_sums.allocate(total_bins);
-    if (status != cudaSuccess) {
-        return status;
+    if (needs_values) {
+        status = d_values.allocate(sample_count);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
-
-    status = d_bin_numbers_x.allocate(sample_count);
-    if (status != cudaSuccess) {
-        return status;
+    if (needs_sum) {
+        status = d_sums.allocate(total_bins);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
-
-    status = d_bin_numbers_y.allocate(sample_count);
-    if (status != cudaSuccess) {
-        return status;
+    if (needs_sumsq) {
+        status = d_sumsq.allocate(total_bins);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
     status = cudaMemcpy(
@@ -1155,16 +1106,6 @@ cudaError_t binned_statistic_2d(
     status = cudaMemcpy(
         d_y.get(),
         host_y,
-        sample_count * sizeof(float),
-        cudaMemcpyHostToDevice
-    );
-    if (status != cudaSuccess) {
-        return status;
-    }
-
-    status = cudaMemcpy(
-        d_values.get(),
-        host_values,
         sample_count * sizeof(float),
         cudaMemcpyHostToDevice
     );
@@ -1192,6 +1133,18 @@ cudaError_t binned_statistic_2d(
         return status;
     }
 
+    if (needs_values) {
+        status = cudaMemcpy(
+            d_values.get(),
+            host_values,
+            sample_count * sizeof(float),
+            cudaMemcpyHostToDevice
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
+    }
+
     status = cudaMemset(
         d_counts.get(),
         0,
@@ -1201,35 +1154,49 @@ cudaError_t binned_statistic_2d(
         return status;
     }
 
-    status = cudaMemset(
-        d_sums.get(),
-        0,
-        total_bins * sizeof(float)
-    );
-    if (status != cudaSuccess) {
-        return status;
+    if (needs_sum) {
+        status = cudaMemset(
+            d_sums.get(),
+            0,
+            total_bins * sizeof(float)
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
+    }
+
+    if (needs_sumsq) {
+        status = cudaMemset(
+            d_sumsq.get(),
+            0,
+            total_bins * sizeof(float)
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
     status = launch_binned_statistic_2d(
         d_x.get(),
         d_y.get(),
-        d_values.get(),
+        needs_values ? d_values.get() : nullptr,
         sample_count,
         d_x_edges.get(),
         x_edge_count,
         d_y_edges.get(),
         y_edge_count,
         d_counts.get(),
-        d_sums.get(),
-        d_bin_numbers_x.get(),
-        d_bin_numbers_y.get()
+        needs_sum ? d_sums.get() : nullptr,
+        needs_sumsq ? d_sumsq.get() : nullptr,
+        nullptr
     );
     if (status != cudaSuccess) {
         return status;
     }
 
+    std::vector<unsigned long long> host_counts(total_bins, 0ULL);
     status = cudaMemcpy(
-        host_counts,
+        host_counts.data(),
         d_counts.get(),
         total_bins * sizeof(unsigned long long),
         cudaMemcpyDeviceToHost
@@ -1238,37 +1205,80 @@ cudaError_t binned_statistic_2d(
         return status;
     }
 
-    status = cudaMemcpy(
-        host_sums,
-        d_sums.get(),
-        total_bins * sizeof(float),
-        cudaMemcpyDeviceToHost
-    );
-    if (status != cudaSuccess) {
-        return status;
+    std::vector<float> host_sums;
+    if (needs_sum) {
+        host_sums.resize(total_bins);
+        status = cudaMemcpy(
+            host_sums.data(),
+            d_sums.get(),
+            total_bins * sizeof(float),
+            cudaMemcpyDeviceToHost
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
-    status = cudaMemcpy(
-        host_bin_numbers_x,
-        d_bin_numbers_x.get(),
-        sample_count * sizeof(unsigned int),
-        cudaMemcpyDeviceToHost
-    );
-    if (status != cudaSuccess) {
-        return status;
+    std::vector<float> host_sumsq;
+    if (needs_sumsq) {
+        host_sumsq.resize(total_bins);
+        status = cudaMemcpy(
+            host_sumsq.data(),
+            d_sumsq.get(),
+            total_bins * sizeof(float),
+            cudaMemcpyDeviceToHost
+        );
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
-    status = cudaMemcpy(
-        host_bin_numbers_y,
-        d_bin_numbers_y.get(),
-        sample_count * sizeof(unsigned int),
-        cudaMemcpyDeviceToHost
-    );
-    if (status != cudaSuccess) {
-        return status;
+    switch (statistic) {
+    case StatisticKind::kCount:
+        for (std::size_t idx = 0; idx < total_bins; ++idx) {
+            host_result[idx] = static_cast<float>(host_counts[idx]);
+        }
+        break;
+    case StatisticKind::kSum:
+        std::copy(host_sums.begin(), host_sums.end(), host_result);
+        break;
+    case StatisticKind::kMean:
+        for (std::size_t idx = 0; idx < total_bins; ++idx) {
+            const unsigned long long count = host_counts[idx];
+            if (count == 0ULL) {
+                host_result[idx] = nan;
+            } else {
+                host_result[idx] =
+                    host_sums[idx] / static_cast<float>(count);
+            }
+        }
+        break;
+    case StatisticKind::kStd:
+        for (std::size_t idx = 0; idx < total_bins; ++idx) {
+            const unsigned long long count = host_counts[idx];
+            if (count == 0ULL) {
+                host_result[idx] = nan;
+                continue;
+            }
+            if (count == 1ULL) {
+                host_result[idx] = 0.0F;
+                continue;
+            }
+            const double count_d = static_cast<double>(count);
+            const double sum_d = static_cast<double>(host_sums[idx]);
+            const double sumsq_d = static_cast<double>(host_sumsq[idx]);
+            const double mean = sum_d / count_d;
+            double variance = sumsq_d / count_d - mean * mean;
+            variance = variance < 0.0 ? 0.0 : variance;
+            host_result[idx] = static_cast<float>(std::sqrt(variance));
+        }
+        break;
+    default:
+        return cudaErrorInvalidValue;
     }
 
     return cudaSuccess;
 }
+
 
 }  // namespace binstatcuda

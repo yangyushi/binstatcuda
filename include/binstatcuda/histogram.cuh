@@ -6,6 +6,13 @@
 
 namespace binstatcuda {
 
+enum class StatisticKind : int {
+    kCount = 0,
+    kSum = 1,
+    kMean = 2,
+    kStd = 3,
+};
+
 cudaError_t histogram_1d(
     const float* host_samples,
     std::size_t sample_count,
@@ -31,9 +38,8 @@ cudaError_t binned_statistic_1d(
     std::size_t sample_count,
     const float* host_edges,
     int edge_count,
-    unsigned long long* host_counts,
-    float* host_sums,
-    unsigned int* host_bin_numbers
+    StatisticKind statistic,
+    float* host_result
 ) noexcept;
 
 cudaError_t binned_statistic_2d(
@@ -45,10 +51,8 @@ cudaError_t binned_statistic_2d(
     int x_edge_count,
     const float* host_y_edges,
     int y_edge_count,
-    unsigned long long* host_counts,
-    float* host_sums,
-    unsigned int* host_bin_numbers_x,
-    unsigned int* host_bin_numbers_y
+    StatisticKind statistic,
+    float* host_result
 ) noexcept;
 
 }  // namespace binstatcuda
