@@ -20,7 +20,6 @@ pip install -e .
 
 ## Usage
 
-
 ```python
 import numpy as np
 import binstatcuda as bsc
@@ -53,6 +52,16 @@ binned_mean_2d = bsc.binned_statistic(
 )
 ```
 
+Supported statistic methods are,
+
+
+- `mean`
+- `std`
+- `sum`
+- `count`
+
+Check `demo/demo.html` for more examples.
+
 ## Note
 
 
@@ -62,6 +71,12 @@ binned_mean_2d = bsc.binned_statistic(
 
 ## TODO
 
+
+Implement more statistical methods for `binned_statistic` and `binned_statistic_2d`:
+
+- `min`
+- `max`
+- `median`
 
 Implement more functions
 

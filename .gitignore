@@ -7,3 +7,6 @@ src/python/binstatcuda/*.so
 **/__pycache__
 **/*.egg-info
 
+# hidden files
+.*
+!.gitignore
