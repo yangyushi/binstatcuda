@@ -43,7 +43,7 @@ binned_mean = bsc.binned_statistic(
     bins=x_edges,
 )
 
-binned_mean_2d = bsc.binned_statistic(
+binned_mean_2d = bsc.binned_statistic_2d(
     x=x,
     y=y,
     values=values,
